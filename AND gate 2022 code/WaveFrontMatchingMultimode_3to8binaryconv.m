@@ -1,0 +1,680 @@
+%% Wavefront Matching script
+% The script takes one mode as an input and one as an 
+% output. After this, it propagates this input forwards, and the output 
+% backwards through the system. Then, it calculates the overlaps of these 
+% propagated modes at every phase screen (PhaseScreenNum) separated by a 
+% set distance (PropDist). The structures of the phase screens are then 
+% updated, so that the input modes eventually convert to the output modes,
+% in the system, after a sufficient number of updates.
+
+% The code was written for and utilized in the work described in:
+% Hiekkamäki, M., Prabhakar, S., & Fickler, R.
+% "Near-perfect measuring of full-field transverse-spatial modes of light "
+% Optics Express 27 (22), 31456 (2019) 
+
+% The general idea is based on the article:
+% Fontaine, N. K., Ryf, R., Chen, H., Neilson, D., & Carpenter, J.  
+% "Design of high order mode-multiplexers using multiplane light conversion." 
+% 2017 European Conference on Optical Communication (ECOC). IEEE, 2017.
+
+% This version of the code requires:
+%
+% -> included in the zip-file
+% AddPhaseColorbar.m (subscript)
+% GenModesLG.m (function)
+% intensity_phase_plot.m (function)
+% SplitStepProp.m (function)
+% update_PhaseScreens.m (subscript)
+% 
+% -> needs to be downloaded from Mathworks:
+% LaguerreGen.m - function by Mattthias Trampisch (2019). 
+%       Generalized Laguerre polynomial 
+%       (https://www.mathworks.com/matlabcentral/fileexchange/15916-generalized-laguerre-polynomial) 
+%       MATLAB Central File Exchange
+
+
+% Created by: Markus Hiekkamäki, Shashi Prabhakar, Robert Fickler, 
+% markus.hiekkamaki@tuni.fi, shashi.sinha@tuni.fi, robert.fickler@tuni.fi, 
+% Last Updated: 11.12.2019
+
+clear all;
+close all;
+format compact
+
+addpath('C:\Users\marco\Dropbox (Harvard University)\IIT\Matlab\scripts\WaveFrontMatching_Code\')
+
+%% Constants and Parameters:
+
+% Nonlinear layer between Hologram planes
+Nonlinearity = 0; %1 = add nonlinear layers in propagation (SplitStepProp.m)
+
+% Regarding optimization:
+    ConvStop = 0; %1 = stop iterations if convergence criterion is met
+    % Convergence accuracy (number of decimals):
+    convLim = 4;
+    % Number of previous iterations to consider when checking for convergence:
+    convValue = 3;
+    % Maximum number of iterations:
+    IterMax = 10000;
+    
+% SLM specifications:
+    PixelSize = 0.008e-3; % width = height(m) --> it sets also the x,y grid step for the spatial modes
+    PhaseScreenNum = 10; % Number of Phase screens used in optimization
+    MaxPhaseValue = 255; % Number of discrete phase shift values in the 2pi range
+    CoarsePixelation = 0; %1 = make the SLM grid coarser
+    NPixelsCoarse = 256;
+
+% Setup parameters:
+    lambda = 1.064e-6; % Wavelength (m)
+%     w_in = 0.65e-3; % Input beam radius (m) 2-state superpos.
+%     w_out = 0.65e-3; % Output beam radius (m) 2-state superpos.
+%     w_in = 0.5e-3; % Input beam radius (m) 3-state superpos., 3 ports, OAM +/-1
+%     w_out = 0.5e-3; % Output beam radius (m) 3-state superpos., 3 ports, OAM +/-1
+    w_in = 0.4e-3; % Input beam radius (m) 3-state superpos., 3 ports, OAM +/-1, +/-2, +/- 3
+    w_out = 0.4e-3; % Output beam radius (m) 3-state superpos., 3 ports, OAM +/-1, +/-2, +/- 3
+    PropDist = 400e-3; % Propagation between phase screens (m)
+
+% Other parameters
+    % Simulation window size (bigger helps with unwanted "computational box reflections"
+    % in split step propagation):
+    WidthX = 5e-3; % SLM window size or arbitrary size (m)
+    WidthY = 5e-3; % SLM window size or arbitrary size (m)
+    
+%% Flags controlling optimization:
+   
+% When are the phase screens updated: (Both can be used at the same time)
+% (This can slightly affect which phase screen removes phase singularities
+% [first or last usually])
+    % Update when propagating backwards:
+    BackUpdate = true;
+    % Update when propagating forwards:
+    ForwardUpdate = true;
+    
+% Display intermediate modes after optimization:
+    DispInterim = false;
+% Save results to the files specified below (false, if you don't want to save):
+    SaveFlag = false;
+    SaveBitmap = false;
+    
+    DispInt = true; %true --> display intensity; false --> display amplitude
+    
+%% Saving parameters:
+
+% Name of folder for saving Bitmap holograms:
+    picLoc = "Test_holos";
+% Name of .mat file to save data to:
+    FileName = "TestFile.mat";
+
+%% Input and output modes:
+
+% Input: (Only LG modes here)
+    % First colum is OAM (azimuthal) index, second is radial index
+    % Example: 
+    % InputModes=[-1 0]; Here the mode is an OAM=-1 mode 
+    % without radial structure
+    SeparateInputModes = 1; %1=separate spatially the modes in case of a superposition
+%     InputModes = [[1 0];[-1 0]];
+
+    %OAM 2-state superposition
+%     InputModes = [[1 0],[2 0];[1 0],[-2 0];[-1 0],[2 0];[-1 0],[-2 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+%     InputModes = [[1 0],[1 0];[1 0],[-1 0];[-1 0],[1 0];[-1 0],[-1 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+%     InputSuperposCoeffs = [[1 1];[1 1];[1 1];[1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+    
+    %OAM 3-state superposition
+%     InputModes = [[1 0],[1 0],[1 0];[1 0],[1 0],[-1 0];[1 0],[-1 0],[1 0];[1 0],[-1 0],[-1 0];[-1 0],[1 0],[1 0];[-1 0],[1 0],[-1 0];[-1 0],[-1 0],[1 0];[-1 0],[-1 0],[-1 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+%     InputSuperposCoeffs = [[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+    
+    InputModes = [[1 0],[2 0],[3 0];[1 0],[2 0],[-3 0];[1 0],[-2 0],[3 0];[1 0],[-2 0],[-3 0];[-1 0],[2 0],[3 0];[-1 0],[2 0],[-3 0];[-1 0],[-2 0],[3 0];[-1 0],[-2 0],[-3 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+    InputSuperposCoeffs = [[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1];[1 1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+    
+    
+    %AND gate
+%     InputModes = [[1 0],[1 0];[1 0],[2 0];[2 0],[1 0];[2 0],[2 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+%     InputSuperposCoeffs = [[1 1];[1 1];[1 1];[1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+
+%     InputModes = [[1 0],[0,0],[1 0];[1 0],[0,0],[2 0];[2 0],[0,0],[1 0];[2 0],[0,0],[2 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+%     InputSuperposCoeffs = [[1 1 1];[1 1 1];[1 1 1];[1 1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+
+    NsuperposInput = size(InputModes,2)/2;
+    InputSuperposCoeffs = InputSuperposCoeffs*1/sqrt(NsuperposInput); %normalization
+    
+% Ouput: 
+    SpotBasis = 1; %1 = overriding output: it will be in spot basis (Gaussian spots in different regions of space)
+%     OutputModes = [[1 0];[2 0];[3 0];[4 0]];
+    
+    %AND gate
+    OutputModes = [[1 0];[1 0];[1 0];[2 0]];
+%     OutputModes = [[1 0];[1 1];[1 2];[2 0]];
+    
+    Nmodes = size(InputModes,1);
+
+%% (NO FURTHER INPUT PARAMETERS FROM THIS POINT ONWARDS)     
+
+%% Calculate rest of the parameters from inputs:
+
+% Grid:
+    nx = round(WidthX/PixelSize); % Amount of pixels (x-dir)
+    ny = round(WidthY/PixelSize); % Amount of pixels (y-dir)
+    x = (-nx/2:nx/2-1)/nx*WidthX;            
+    y = (-ny/2:ny/2-1)/ny*WidthY; 
+    [X,Y] = meshgrid(x,y); % Cartesian grid
+%     clear x y
+
+    % Grid in cylindrical coordinates:
+    Rad = sqrt(X.^2+Y.^2);
+    Angle = angle(X+1i.*Y)+pi; % Matrix with all angles starting left-center
+
+% K-space grid used in split step propagation:
+    % Move the origin to match the SplitStepProp-function:
+    kx = (mod(nx/2:nx+nx/2-1,nx)-(nx/2))*2*pi/WidthX;
+    ky = (mod(ny/2:ny+ny/2-1,ny)-(ny/2))*2*pi/WidthY;
+    [KX,KY] = meshgrid(kx,ky);
+    % Matrix for k-space propagation direction components:
+    KZ = sqrt((2*pi/lambda)^2-(KX.^2+KY.^2)); 
+    clear kx ky KX KY
+    
+%% Calculate used modes:
+fprintf('Calculating modes \n \n')
+
+for jmodes = 1:Nmodes
+    
+    ModesIn(:,:,jmodes) = zeros(nx,nx);
+    for jsuperposInput = 1:NsuperposInput
+        if SeparateInputModes
+            SpotInX0(jmodes) = - WidthX/2 + WidthX/NsuperposInput/2 + (jsuperposInput-1)*WidthX/NsuperposInput;
+            SpotInY0(jmodes) = 0;
+            ShiftRad = sqrt((X-SpotInX0(jmodes)).^2+(Y-SpotInY0(jmodes)).^2);
+            ShiftAngle = angle((X-SpotInX0(jmodes))+1i.*(Y-SpotInY0(jmodes)))+pi; % Matrix with all angles starting left-center
+            ModesIn(:,:,jmodes) = ModesIn(:,:,jmodes)+ InputSuperposCoeffs(jmodes,jsuperposInput)*GenModesLG(InputModes(jmodes,2*jsuperposInput-1:2*jsuperposInput), w_in, ShiftRad, ShiftAngle);
+        else
+            ModesIn(:,:,jmodes) = ModesIn(:,:,jmodes) + InputSuperposCoeffs(jmodes,jsuperposInput)*GenModesLG(InputModes(jmodes,2*jsuperposInput-1:2*jsuperposInput), w_in, Rad, Angle);
+        end
+    end
+    
+    if SpotBasis
+        switch NsuperposInput
+            case 2
+                SpotRad = 2*w_out;
+            case 3
+                SpotRad = 3*w_out;
+        end
+        SpotAngle = jmodes*2*pi/Nmodes;
+        SpotOutX0(jmodes) = SpotRad*cos(SpotAngle);
+        SpotOutY0(jmodes) = SpotRad*sin(SpotAngle);
+        ShiftRadOut(:,:,jmodes) = sqrt((X-SpotOutX0(jmodes)).^2+(Y-SpotOutY0(jmodes)).^2);
+        ShiftAngleOut(:,:,jmodes) = angle((X-SpotOutX0(jmodes))+1i.*(Y-SpotOutY0(jmodes)))+pi; % Matrix with all angles starting left-center
+        ModesOut(:,:,jmodes) = GenModesLG([0 0], w_out, ShiftRadOut(:,:,jmodes), ShiftAngleOut(:,:,jmodes));
+    else
+        ModesOut(:,:,jmodes) = GenModesLG(OutputModes(jmodes,:), w_out, Rad, Angle);
+    end
+        
+% Display modes:
+InitialmodeFig = figure;
+% Input modes:               
+subplot(2, 1, 1);
+if DispInt
+    intensity_phase_plot(ModesIn(:,:,jmodes))
+else
+    amplitude_phase_plot(ModesIn(:,:,jmodes))
+end
+title('Input mode')
+axis square
+AddPhaseColorbar
+
+% Output modes:     
+subplot(2, 1, 2);
+if DispInt
+    intensity_phase_plot(ModesOut(:,:,jmodes))
+else
+    amplitude_phase_plot(ModesOut(:,:,jmodes))
+end
+title('Output mode')
+axis square
+AddPhaseColorbar
+
+end
+
+%% Propagate the input and output before starting optimization:
+fprintf('Initial propagation \n \n')
+
+for jmodes=1:Nmodes
+
+    % Initialize datastructures:
+        Beam = zeros(nx,nx,PhaseScreenNum + 1,jmodes); 
+        % The (+ 1) Beam structure is used to store the simulated output that 
+        % is compared with the wanted output.
+        BeamBack = zeros(nx,nx,PhaseScreenNum,jmodes);
+        Hologram = zeros(nx,nx,PhaseScreenNum,jmodes);
+        
+end
+
+% Propagating the input forwards:
+for PhScrInd = 1:1:PhaseScreenNum % For all phase screens
+
+    for jmodes=1:Nmodes
+
+    if PhScrInd == 1 % = The Initial mode
+        Beam(:,:,1,jmodes) = ModesIn(:,:,jmodes);
+    end
+
+    % Propagate beam from previous phase screen while applying the
+    % phase screen's hologram
+    % (hologram's structure doesn't matter if it's initially just zeros):
+    Beam(:,:,PhScrInd+1,jmodes) = Beam(:,:,PhScrInd,jmodes).*exp(-1i*(Hologram(:,:,PhScrInd)));
+    Beam(:,:,PhScrInd+1,jmodes) = SplitStepProp(Beam(:,:,PhScrInd+1,jmodes),KZ,PropDist);
+
+    end
+end
+
+% Then propagate the output backwards:
+for PhScrInd=PhaseScreenNum:-1:2 % For all phase screens
+
+    for jmodes=1:Nmodes
+
+    if PhScrInd == PhaseScreenNum % = For final output mode
+
+        % We invert the phase to get backwards propagation when
+        % using the same Split step propagation function.
+        % Note: the wanted output is simulated to be "formed" one
+        % "PropDist" away from the last hologram
+        BeamBack(:,:,PhaseScreenNum,jmodes) = SplitStepProp(abs(ModesOut(:,:,jmodes)).*...
+            exp(-(1i*angle(ModesOut(:,:,jmodes)))),KZ,PropDist);
+    end
+
+    % Propagate from previous phase screen while applying the phase
+    % screen hologram:
+    BeamBack(:,:,PhScrInd-1,jmodes) = BeamBack(:,:,PhScrInd,jmodes).*exp(1i*(Hologram(:,:,PhScrInd)));
+    BeamBack(:,:,PhScrInd-1,jmodes) = SplitStepProp(BeamBack(:,:,PhScrInd-1,jmodes),KZ,PropDist);
+
+    end
+end
+
+    
+%% Creating a stop-button to manually stop the optimization at any point:
+% Pressing this stop-button only stops the optimization and the results 
+% will still be plotted. 
+StopFig = figure;
+set(StopFig,'Position',[300 300 100 50]); %figure appears at initial coordinates
+set(StopFig,'menubar','none','units','pixels');
+StopVar = uicontrol('Style', 'PushButton', 'String', 'Stop WFM', 'Callback', 'delete(gcbo)', 'Position', [1 1 100 50]);
+drawnow
+
+%% WaveFront Matching:
+fprintf('WaveFront Matching \n \n')
+
+% Initialize figures and parameters for observing the convergence:
+    IterationCount = 0; % Tracks the iteration count of the process 
+    % To store the visibility and overlap of optimized modes:
+    for jmodes=1:Nmodes
+        resultoverlap(jmodes,:) = NaN(1, IterMax);
+    end
+    
+    % Initialize figure for tracking visibility and overlap:
+    OptimFig = figure;
+    OptimAx = subplot(1,1,1);
+    hold all
+    for jmodes=1:Nmodes
+        line1(jmodes) = plot(OptimAx,resultoverlap(jmodes,:),'DisplayName',['Overlap ' num2str(jmodes)]);
+    end
+    legend('Location', 'southeast')
+    ylabel('Overlap')
+    xlabel('Iteration')
+    grid on
+    axis square
+    drawnow
+    
+% Start optimizing:
+% Until iterations reach IterNum or the stop button is pressed:
+while IterationCount <= IterMax && ishandle(StopVar)
+    IterationCount = IterationCount + 1;
+    fprintf(strcat("Current iteration is ", num2str(IterationCount), "\n"))
+    
+% Propagate and update in the forwards direction
+    for PhScrInd = 1:PhaseScreenNum
+        
+        if ForwardUpdate
+            update_PhasescreensMultimode % Subscript to update current phase screen
+        end
+        
+        for jmodes=1:Nmodes
+            % Modulate beam with new hologram:
+            % Imprint hologram on forward propagating beam
+            Beam(:,:,PhScrInd+1,jmodes) = Beam(:,:,PhScrInd,jmodes).*exp(1i*(Hologram(:,:,PhScrInd)));
+            % Propagate to next hologram (or to the end)
+            Beam(:,:,PhScrInd+1,jmodes) = SplitStepProp(Beam(:,:,PhScrInd+1,jmodes),KZ,PropDist);
+        end
+            
+    end
+    
+    
+% Propagate and update in the backwards direction:
+    for PhScrInd = PhaseScreenNum:-1:1
+        
+        if BackUpdate
+            update_PhasescreensMultimode % Subscript to update current phase screen
+        end
+        
+        for jmodes=1:Nmodes
+            % Modulate backwards beam with new hologram:
+            if PhScrInd > 1
+                BeamBack(:,:,PhScrInd-1,jmodes) = BeamBack(:,:,PhScrInd,jmodes).*exp(1i*Hologram(:,:,PhScrInd));
+                % Propagate backwards (already conjugated in the first
+                % propagations)
+                BeamBack(:,:,PhScrInd-1,jmodes) = SplitStepProp(BeamBack(:,:,PhScrInd-1,jmodes),KZ,PropDist);
+            end
+        end
+    end
+    
+% Modulate forwards beam with new hologram:
+    for PhScrInd=1:PhaseScreenNum
+        for jmodes=1:Nmodes
+            % imprint hologram on forward beam
+            Beam(:,:,PhScrInd+1,jmodes) = Beam(:,:,PhScrInd,jmodes).*exp(1i*(Hologram(:,:,PhScrInd)));
+            % propagate to next hologram
+            Beam(:,:,PhScrInd+1,jmodes) = SplitStepProp(Beam(:,:,PhScrInd+1,jmodes),KZ,PropDist);
+        end
+    end
+    
+% Check overlap and visibility, and plot current values
+    
+    for jmodes=1:Nmodes
+        % Check overlap between transformations and wanted outputs:
+        Overlap_to_output = real(abs(sum(sum(conj(Beam(:,:,PhaseScreenNum+1,jmodes)).*ModesOut(:,:,jmodes)))).^2);    
+        resultoverlap(jmodes,IterationCount) = Overlap_to_output;
+    
+        % Try updating the plot (if it was not closed by the user)
+        try
+            line1(jmodes).YData = resultoverlap(jmodes,:);
+            drawnow
+        catch ME
+            fprintf("Figure for optimization was closed.")
+        end 
+    end
+    % Display values related to converging:
+    if IterationCount > convValue+1
+        % Latest values:
+        for jmodes=1:Nmodes
+            LastOverl(jmodes) = round(mean(resultoverlap(jmodes,IterationCount-convValue:IterationCount),'omitnan'), convLim);
+            disp(strcat(['Current Overlap ',num2str(jmodes), ': ', num2str(resultoverlap(jmodes,IterationCount)), '; Mean of previous: ', num2str(LastOverl(jmodes))]))
+        end
+        
+        % Stop optimization if the values converged:
+        if ConvStop
+            if round(resultoverlap(:,IterationCount), convLim) <= LastOverl
+                close(StopFig)
+            end
+        end
+    end
+end
+
+% To make sure the stop button and OptimFig are closed:
+try
+    close(StopFig)
+%     close(OptimFig)
+catch ME
+    try 
+%         close(OptimFig)
+    catch ME
+    end
+end
+
+ 
+%% Display the results
+
+% Display the phase screens:
+figure
+for PhScrInd=1:PhaseScreenNum    
+    subplot(1,PhaseScreenNum,PhScrInd);
+    % Colormap:
+    colormap(hsv)
+    imagesc(Hologram(:,:,PhScrInd));
+    % Get rid of axes:
+    set(gca,'xtick',[])
+    set(gca,'ytick',[])
+    axis square
+    title(strcat(['Hologram', num2str(PhScrInd)]))   
+end
+% Colorbar:
+originalSize = get(gca, 'Position');
+cbr = colorbar;
+cbr.Ticks = [0 3.14 6.25];
+cbr.TickLabelInterpreter = 'latex';
+cbr.TickLabels = {'$0$', '$\pi$', '$2\pi$'};
+cbr.FontSize = 26;
+cbr.FontName = 'Times New Roman';
+set(gca, 'Position', originalSize);
+set(gcf,'WindowState','maximized')
+
+% The beam structure in its intermediate stages:
+if DispInterim
+    for jmodes=1:Nmodes
+        figure
+        for PhaseScrInd = 1:PhaseScreenNum + 1
+            subplot(1, PhaseScreenNum + 1, PhaseScrInd)
+            if DispInt
+                intensity_phase_plot(Beam(:,:,PhaseScrInd,jmodes))
+%                 surf(abs(Beam(:,:,PhaseScrInd,jmodes)).^2);view([0 90]);shading flat;
+%                 colorbar
+            else
+                amplitude_phase_plot(Beam(:,:,PhaseScrInd,jmodes))
+            end
+            title(strcat(['Mode after hologram ', num2str(PhaseScrInd-1)]))
+            axis square
+        end
+        originalSize = get(gca, 'Position');
+        AddPhaseColorbar
+        set(gca, 'Position', originalSize);
+        set(gcf,'WindowState','maximized')
+    end
+end
+
+% Plot the simulated conversion of input and output: 
+for jmodes=1:Nmodes
+    figure
+    BeamBefore = ModesIn(:,:,jmodes);
+    subplot(2,1,1);
+    if DispInt
+        intensity_phase_plot(BeamBefore)
+    else
+        amplitude_phase_plot(BeamBefore)
+    end
+    title('Initial mode')
+    axis square
+    AddPhaseColorbar
+    BeamAfter = Beam(:,:,PhaseScreenNum+1,jmodes);
+    subplot(2,1,2);
+    if DispInt
+        intensity_phase_plot(BeamAfter)
+%         surf(abs(BeamAfter).^2);view([0 90]);shading flat;
+    else
+        amplitude_phase_plot(BeamAfter)
+%         surf(abs(BeamAfter));view([0 90]);shading flat;
+    end
+    title('Simulated output')
+    axis square
+    AddPhaseColorbar
+end
+    
+% Show final overlap:
+fprintf(strcat("\n", "Final average overlap is ", num2str(trace(Overlap_to_output)), "\n"));
+
+%% Peak power in output spot basis to calculate crosstalk
+
+if SpotBasis
+    Crosstalk = zeros(Nmodes,Nmodes);
+    for jmodes=1:Nmodes
+        BeamAfter = Beam(:,:,PhaseScreenNum+1,jmodes);
+        for kmodes=1:Nmodes
+%             [~,IndX] = min(abs(x-SpotOutX0(kmodes)));
+%             [~,IndY] = min(abs(y-SpotOutY0(kmodes)));
+%             Crosstalk(jmodes,kmodes) = abs(BeamAfter(IndY,IndX)).^2;
+            
+            SpotFilter = abs(BeamAfter).^2;
+            SpotFilterComplex = BeamAfter;
+            
+%             figure            
+%             subplot(211)
+%             surf(SpotFilter); view([0 90]); shading flat;
+            
+            SpotFilter(ShiftRadOut(:,:,kmodes) > w_out) = 0;
+            SpotFilterComplex(ShiftRadOut(:,:,kmodes) > w_out) = 0;
+            
+%             subplot(212)
+%             surf(SpotFilter); view([0 90]); shading flat;
+            
+            Crosstalk(jmodes,kmodes) = sum(sum(SpotFilter));
+            CrosstalkComplex(jmodes,kmodes) = sum(sum(SpotFilterComplex));
+        end
+    end
+    
+    Crosstalk = Crosstalk/max(max(Crosstalk));
+    CrosstalkComplex = CrosstalkComplex/max(max(abs(CrosstalkComplex)));
+    
+    CTint = cmocean('ice');
+    figure
+    set(gcf,'Position',[590.6000  321.8000  293.2000  240.0000])
+    imagesc(Crosstalk);
+    view([0 90]);
+    shading flat;
+    set(gca,'XTick',[],'YTick',[])
+    axis square
+    colormap(CTint)
+    colorbar
+    title('Intensity')
+
+    figure
+    subplot(211)
+    imagesc(abs(CrosstalkComplex));
+    view([0 90]);
+    shading flat;
+    set(gca,'XTick',[],'YTick',[])
+    axis square
+    colormap(CTint)
+    colorbar
+    title('Amplitude')
+    subplot(212)
+    imagesc(angle(CrosstalkComplex));
+    view([0 90]);
+    shading flat;
+    set(gca,'XTick',[],'YTick',[])
+    axis square
+    colormap jet
+    colorbar
+    title('Phase')
+end
+
+%% Save data
+
+if SaveFlag
+   save(FileName,'Hologram') 
+end
+% Save bitmap holograms:
+if SaveBitmap
+    % Check if given folder exists
+    if ~exist(picLoc, 'dir')
+           mkdir(picLoc)
+    end
+    % Save holograms to the given folder with names "H1.bmp",...
+    for i = 1:size(Hologram, 3)
+        imwrite(mat2gray(Hologram(:,:,i),[0, 2*pi]), strcat(picLoc, 'H',num2str(i),'.bmp'))
+    end
+end
+
+
+%% Propagate an arbitrary field through the optimized MPLC
+
+PropArbField = 0;
+
+if PropArbField
+    jmodes = 1;
+    TestBeam = ModesIn(:,:,jmodes);
+%     TestBeam(X > 0) = 0;
+%     TestBeam(X < 0) = 0;
+    TestBeamIn = TestBeam;
+
+    for PhScrInd = 1:1:PhaseScreenNum % For all phase screens
+        % Propagate beam from previous phase screen while applying the
+        % phase screen's hologram
+        % (hologram's structure doesn't matter if it's initially just zeros):
+        TestBeam = TestBeam.*exp(1i*(Hologram(:,:,PhScrInd)));
+        TestBeam = SplitStepProp(TestBeam,KZ,PropDist);
+    end
+    
+    % Plot the simulated conversion of input and output: 
+    figure
+    subplot(2,1,1);
+    if DispInt
+        intensity_phase_plot(TestBeamIn)
+    else
+        amplitude_phase_plot(TestBeamIn)
+    end
+    title('Initial mode')
+    axis square
+    AddPhaseColorbar
+    subplot(2,1,2);
+    if DispInt
+        intensity_phase_plot(TestBeam)
+%         surf(abs(TestBeam).^2);view([0 90]);shading flat;
+    else
+        amplitude_phase_plot(TestBeam)
+%         surf(abs(TestBeam));view([0 90]);shading flat;
+%           surf(angle(TestBeam));view([0 90]);shading flat;
+    end
+    title('Simulated output')
+    axis square
+    AddPhaseColorbar
+    
+%     TestBeamIn2 = TestBeamIn;
+%     TestBeam2 = TestBeam;
+    
+end
+
+%% Modal decomposition
+
+modaldec = 0;
+
+if modaldec
+    f1 = 0.100; %[m] lens focal length
+    L1 = exp(1i*2*pi/lambda*(f1 - (X.^2 + Y.^2 + f1^2).^0.5)); %spherical lens
+
+    % DecompIn = ModesIn(:,:,1);
+    % DecompIn = Beam(:,:,PhaseScreenNum+1,1);
+
+    %Try to change the weight of decomp of superpos of 1 and 2 by spatial
+    %filtering with pinholes: 2D param space, center and radius of pinhole.
+    %plot the ratio between the decomp weights (always filtered on axis 
+
+    %Try to relax constraint on overlap: i.e. normalize output field energy to
+    %the same of the input beam, then compute overlap
+
+    %Recheck after lens was added --> Not working at all, cannot focus beam.
+    %send beam to analyze directly on SLM
+
+    for jmodes = 1:Nmodes
+        DecompIn = Beam(:,:,PhaseScreenNum+1,jmodes);
+    %     DecompIn(Rad < w_in/2) = 0; %spatial filtering
+    %     DecompIn(Rad > w_in) = 0; %spatial filtering
+        figure
+        set(gcf,'WindowState','maximized')
+        subplot(1,3,1)
+        imagesc(abs(DecompIn).^2);
+        view([0 90]); shading flat; axis square;
+        for AnalyzerOAM = 1:2
+    %         Decomp = SplitStepProp(DecompIn,KZ,f1);
+            Decomp = L1.*Decomp;
+            Decomp = SplitStepProp(DecompIn,KZ,f1);
+            HoloOAM = exp(-1i*AnalyzerOAM*Angle);
+            Decomp = Decomp.*HoloOAM;
+            Decomp = SplitStepProp(DecompIn,KZ,f1);
+    %         Decomp = L1.*Decomp;
+    %         Decomp = SplitStepProp(Decomp,KZ,f1);
+
+            subplot(1,3,1+AnalyzerOAM)
+            imagesc(abs(Decomp).^2);
+        %     imagesc(angle(HoloOAM));
+            view([0 90]); shading flat; axis square;
+        end
+    end
+    
+end
+    
