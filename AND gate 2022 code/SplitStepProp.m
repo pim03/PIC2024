@@ -14,16 +14,18 @@ if evalin( 'base', 'Nonlinearity == 1' )
     BeamProp = ifft2(BeamK);
     
     %Saturable absorber
-%     Isat = 1e-4; %saturation intensity
-%     Tmin = 0.8; %transmission for zero incident intensity
-%     Tmax = 0.99; %transmission at saturation intensity
-%     NL = Tmin + abs(BeamProp).^2/Isat*(Tmax - Tmin); %nonlinear transmission matrix
-%     NL(NL > 1) = 1; %impose that maximum transmission is unity
-%     BeamProp = BeamProp.*NL;
+    Isat = 0.5e-4; %saturation intensity - optical intensity (power per unit area) that it takes in a steady state to reduce the absorption to half of its unbleached value
+    Tmin = 0.8; %transmission for zero incident intensity
+    Tmax = 0.99; %transmission at saturation intensity
+    alpha_loss = 0.01; %difference from total transmition
+    %NL = Tmin + abs(BeamProp).^2/Isat*(Tmax - Tmin); %nonlinear transmission matrix
+    %NL(NL > 1) = 1; %impose that maximum transmission is unity
+    NL = 1 - (Tmax-Tmin)*exp(-abs(BeamProp).^2/Isat) - alpha_loss; %from paper "https://www.researchgate.net/publication/336731959_Study_of_a_Graphene_Saturable_Absorber_Film_Fabricated_by_the_Optical_Deposition_Method"
+    BeamProp = BeamProp.*NL;
 
     %Photorefractive crystal
-    NL = pi*abs(BeamProp).^2/(1 + abs(BeamProp).^2);
-    BeamProp = BeamProp.*exp(-1i*NL);
+    %NL = pi*abs(BeamProp).^2/(1 + abs(BeamProp).^2);
+    %BeamProp = BeamProp.*exp(-1i*NL);
     
     BeamFFT = fft2(BeamProp);
     BeamK = BeamFFT.*exp(-1i*(KZ*distance/2));    

@@ -41,6 +41,7 @@ clear all;
 close all;
 format compact
 
+addpath('C:\Users\Carolina\Desktop\PIC2\Wavefront matching_AND gate\Wavefront matching')
 
 %% Constants and Parameters:
 
@@ -58,7 +59,7 @@ Nonlinearity = 0; %1 = add nonlinear layers in propagation (SplitStepProp.m)
     
 % SLM specifications:
     PixelSize = 8e-6; % width = height(m) --> it sets also the x,y grid step for the spatial modes
-    PhaseScreenNum = 4; % Number of Phase screens used in optimization
+    PhaseScreenNum = 2; % Number of Phase screens used in optimization
     MaxPhaseValue = 255; % Number of discrete phase shift values in the 2pi range
     CoarsePixelation = 0; %1 = make the SLM grid coarser
     NPixelsCoarse = 256;
@@ -67,8 +68,8 @@ Nonlinearity = 0; %1 = add nonlinear layers in propagation (SplitStepProp.m)
     lambda = 1550e-9; % Wavelength (m)
 %     w_in = 0.65e-3; % Input beam radius (m) 2-state superpos.
 %     w_out = 0.65e-3; % Output beam radius (m) 2-state superpos.
-    w_in = 0.1e-3; % Input beam radius (m) 3-state superpos.
-    w_out = 0.1e-3; % Output beam radius (m) 3-state superpos.
+    w_in = 0.5e-3; % Input beam radius (m) 3-state superpos.
+    w_out = 0.5e-3; % Output beam radius (m) 3-state superpos.
     PropDist = 30e-3; % Propagation between phase screens (m)
 
 % Other parameters
@@ -93,7 +94,7 @@ Nonlinearity = 0; %1 = add nonlinear layers in propagation (SplitStepProp.m)
     SaveFlag = false;
     SaveBitmap = false;
     
-    DispInt = true; %true --> display intensity; false --> display amplitude
+    DispInt = false; %true --> display intensity; false --> display amplitude
     
 %% Saving parameters:
 
@@ -113,19 +114,29 @@ Nonlinearity = 0; %1 = add nonlinear layers in propagation (SplitStepProp.m)
     SeparateInputModes = 1; %1=separate spatially the modes in case of a superposition
 
     %AND gate
+    %InputModes = [[0 0],[0 0];[0 0],[1 0];[1 0],[0 0];[1 0],[1 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+    %InputSuperposCoeffs = [[1 1];[1 1];[1 1];[1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+    
+    %Using 2 types of vortex as input
     InputModes = [[1 0],[1 0];[1 0],[2 0];[2 0],[1 0];[2 0],[2 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
     InputSuperposCoeffs = [[1 1];[1 1];[1 1];[1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
+    
+    %InputModes = [[1 0],[1 0];[2 0],[2 0]]; %if size(InputModes,2) > 2 --> superpos. of states [[superpos1 modeA],[superpos1 modeB];[superpos2 modeA],[superpos2 mode B]]
+    %InputSuperposCoeffs = [[1 1];[1 1];[1 1];[1 1]]; %Coefficients of the superposition --> [[a*superpos1 modeA + b*superpos1 modeB];[c*superpos2 modeA + d*superpos2 modeB]]
 
-    NsuperposInput = size(InputModes,2)/2;
+    NsuperposInput = size(InputModes,2)/2
     InputSuperposCoeffs = InputSuperposCoeffs*1/sqrt(NsuperposInput); %normalization
     
 % Ouput: 
     SpotBasis = 0; %1 = overriding output: it will be in spot basis (Gaussian spots in different regions of space)
 
     %AND gate
+    %OutputModes = [[0 0];[0 0];[0 0];[1 0]];
     OutputModes = [[1 0];[1 0];[1 0];[2 0]];
-    
+    %OutputModes = [[2 0];[1 0]];
+
     Nmodes = size(InputModes,1);
+    
 
 %% (NO FURTHER INPUT PARAMETERS FROM THIS POINT ONWARDS)     
 
@@ -169,7 +180,7 @@ for jmodes = 1:Nmodes
             SpotInY0(jmodes) = 0;
             ShiftRad = sqrt((X-SpotInX0(jmodes)).^2+(Y-SpotInY0(jmodes)).^2);
             ShiftAngle = angle((X-SpotInX0(jmodes))+1i.*(Y-SpotInY0(jmodes)))+pi; % Matrix with all angles starting left-center
-            ModesIn(:,:,jmodes) = ModesIn(:,:,jmodes)+ InputSuperposCoeffs(jmodes,jsuperposInput)*GenModesLG(InputModes(jmodes,2*jsuperposInput-1:2*jsuperposInput), w_in, ShiftRad, ShiftAngle);
+            ModesIn(:,:,jmodes) = ModesIn(:,:,jmodes) + InputSuperposCoeffs(jmodes,jsuperposInput)*GenModesLG(InputModes(jmodes,2*jsuperposInput-1:2*jsuperposInput), w_in, ShiftRad, ShiftAngle);
         else
             ModesIn(:,:,jmodes) = ModesIn(:,:,jmodes) + InputSuperposCoeffs(jmodes,jsuperposInput)*GenModesLG(InputModes(jmodes,2*jsuperposInput-1:2*jsuperposInput), w_in, Rad, Angle);
         end
@@ -193,9 +204,9 @@ for jmodes = 1:Nmodes
     end
         
 % Display modes:
-InitialmodeFig = figure;
+InitialmodeFig = figure(1);
 % Input modes:               
-subplot(2, 1, 1);
+subplot(Nmodes, NsuperposInput, 2*jmodes-1);
 if DispInt
     intensity_phase_plot(ModesIn(:,:,jmodes))
 else
@@ -206,7 +217,7 @@ axis square
 AddPhaseColorbar
 
 % Output modes:     
-subplot(2, 1, 2);
+subplot(Nmodes, NsuperposInput, 2*jmodes);
 if DispInt
     intensity_phase_plot(ModesOut(:,:,jmodes))
 else
@@ -363,8 +374,9 @@ while IterationCount <= IterMax && ishandle(StopVar)
     
     for jmodes=1:Nmodes
         % Check overlap between transformations and wanted outputs:
-        Overlap_to_output = real(abs(sum(sum(conj(Beam(:,:,PhaseScreenNum+1,jmodes)).*ModesOut(:,:,jmodes)))).^2);    
-        resultoverlap(jmodes,IterationCount) = Overlap_to_output;
+        Overlap_to_output = real(abs(sum(sum(conj(Beam(:,:,PhaseScreenNum+1,jmodes)).*ModesOut(:,:,jmodes)))).^2);     %%%%  change to not account for amplitude u -> exp(i angle(u))
+        PhaseOverlap_to_output = real(abs(sum(sum(conj(exp(i*angle(Beam(:,:,PhaseScreenNum+1,jmodes)))).*exp(i*angle(ModesOut(:,:,jmodes)))))));
+        resultoverlap(jmodes,IterationCount) = PhaseOverlap_to_output;
     
         % Try updating the plot (if it was not closed by the user)
         try
@@ -454,9 +466,9 @@ end
 
 % Plot the simulated conversion of input and output: 
 for jmodes=1:Nmodes
-    figure
+    figure(1)
     BeamBefore = ModesIn(:,:,jmodes);
-    subplot(2,1,1);
+    subplot(Nmodes, NsuperposInput, 2*jmodes-1);
     if DispInt
         intensity_phase_plot(BeamBefore)
     else
@@ -466,7 +478,7 @@ for jmodes=1:Nmodes
     axis square
     AddPhaseColorbar
     BeamAfter = Beam(:,:,PhaseScreenNum+1,jmodes);
-    subplot(2,1,2);
+    subplot(Nmodes, NsuperposInput, 2*jmodes);
     if DispInt
         intensity_phase_plot(BeamAfter)
 %         surf(abs(BeamAfter).^2);view([0 90]);shading flat;
@@ -585,8 +597,8 @@ if PropArbField
     end
     
     % Plot the simulated conversion of input and output: 
-    figure
-    subplot(2,1,1);
+    figure(1)
+    subplot(Nmodes, NsuperposInput, 2*jmodes-1);
     if DispInt
         intensity_phase_plot(TestBeamIn)
     else
@@ -595,7 +607,7 @@ if PropArbField
     title('Initial mode')
     axis square
     AddPhaseColorbar
-    subplot(2,1,2);
+    subplot(Nmodes, NsuperposInput, 2*jmodes);
     if DispInt
         intensity_phase_plot(TestBeam)
 %         surf(abs(TestBeam).^2);view([0 90]);shading flat;
@@ -617,19 +629,19 @@ end
 
 for jfield = 1:1:Nmodes
     
-    InputField = Beam(:,:,PhaseScreenNum+1,jfield);
+    InputField = Beam(:,:,PhaseScreenNum+1,jfield); % Go grab the final result from the simulation
         
 ReconField = zeros(nx,nx); % initialise reconstructed field
 
 % Do the decomposition for a predetermined set of modes
-Prange = 0:0;
-Lrange = 1:2;
+Prange = 0:0; % same as Prange = 0
+Lrange = 1:2; % same as Lrange = [1,2] 
 PMax = max(Prange); % maximum decomp for radial index
 LMax = max(Lrange); % maximum decomp for azimuthal index
 c_meas = zeros(length(Prange),length(Lrange)); % initialise
 w00 = w_out; % [mm] beam size of basis modes
 
-for jp = 1:length(Prange)
+for jp = 1:length(Prange)   %could ignore this loop beacuase the input beams only differ in azimuthal number
     for jl = 1:length(Lrange)
         p = Prange(jp);
         l = Lrange(jl);
@@ -644,7 +656,7 @@ end
 c_meas = c_meas./norm(c_meas); % manually normalise measured expansion coefficients
 
 
-% Plots
+%Plots
 Q = 200;
 figure('color','w','units','points','position',[50 50 2*Q 2*Q]);
 
@@ -658,19 +670,24 @@ imagesc(abs(ReconField).^2);
 text(nx/30,nx/20,'Reconstructed','FontSize',14);
 set(gca,'units','points','position',[Q Q Q Q],'visible','off');
 
+[val, idx] = max(c_meas(:));
 subplot(2,2,3);
-bar(Lrange,abs(c_meas(:)).^2); title(['|\rho_n|^2, max = ', num2str(round(max(abs(c_meas(:)).^2)*100,1)),'%']);
+bar(Lrange,abs(c_meas(:)).^2); title(['|\rho_n|^2, max = ', num2str(round((abs(val)^2)*100,1)),'%']);
 set(gca,'units','points','position',[Q/10 Q/10 0.8*Q 0.8*Q]);
 
 subplot(2,2,4);
-bar(Lrange,angle(c_meas(:))); title('\phi_n');
+bar(Lrange,angle(c_meas(:))); title(['\phi_n = ', num2str(round(angle(c_meas(idx)),3))]);
 set(gca,'units','points','position',[Q+Q/10 Q/10 0.8*Q 0.8*Q]);
 
-% Phase plots as inserts
-axes('pos',[.35 .85 .15 .15])
-imagesc(angle(InputField)); xticks([]); yticks([]);
-axes('pos',[.85 .85 .15 .15])
-imagesc(angle(ReconField)); xticks([]); yticks([]);
+%%%% plot in 3d the contrast (mean of the c_n of each mode) c_n = c_l1/c_l2(the bigger on top)
+%%%% check ortogonally between lg1 and lg0 <eil1phi|eil1phi> -> 1 <eil1phi|eil2phi> -> 0 beyond unitary
+%%%% trasnformation
+
+%% Phase plots as inserts
+%axes('pos',[.35 .85 .15 .15])
+%imagesc(angle(InputField)); xticks([]); yticks([]);
+%axes('pos',[.85 .85 .15 .15])
+%imagesc(angle(ReconField)); xticks([]); yticks([]);
 
 % figure
 % set(gcf,'position',[610.1429   68.4286  466.2857  532.0000])
